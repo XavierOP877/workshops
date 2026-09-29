@@ -56,6 +56,11 @@ try:
     write(root, "good", "pt-BR", extra="translated_from: en@2026-01-01\ntranslators: [T]\n")
     assert validate(root) == [], validate(root)
 
+    # link-like code inside a fenced block is not a link
+    write(root, "good", "en", body=BODY + "```solidity\np = new bytes32[](2);\n```\n")
+    assert validate(root) == [], validate(root)
+    write(root, "good", "en")
+
     # optional sections only warn; required ones error
     d = root / "workshops" / "good" / "en"
     write(root, "good", "en", body=BODY.replace("## Exercises\n", ""))

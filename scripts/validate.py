@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 LEVEL_ORDER = {"beginner": 0, "intermediate": 1, "advanced": 2}
 LEVELS = set(LEVEL_ORDER)
 REQUIRED = ["title", "language", "authors", "level", "duration", "last_updated"]
-# ponytail: BCP-47 subset — language, optional script, optional region (en, pt-BR, zh-Hans, zh-Hant-TW)
+# BCP-47 subset — language, optional script, optional region (en, pt-BR, zh-Hans, zh-Hant-TW)
 LANG_RE = re.compile(r"^[a-z]{2,3}(-[A-Z][a-z]{3})?(-[A-Z]{2}|-[0-9]{3})?$")
 SLUG_RE = re.compile(r"^[a-z]+(-[a-z]+)*$")
 SOURCE_RE = re.compile(r"^([A-Za-z0-9-]+)@(\d{4}-\d{2}-\d{2})$")
@@ -143,13 +143,14 @@ def check_file(path, fm, body, slugs, root):
             if h not in h2:
                 warnings.append(f"README.md: optional section '{h}' is missing")
     else:
-        # ponytail: non-English headings can't be matched by text; go by section count
+        # non-English headings can't be matched by text; go by section count
         if len(h2) < len(REQUIRED_HEADINGS):
             errors.append(f"README.md: expected at least {len(REQUIRED_HEADINGS)} '## ' sections (overview, prerequisites, workshop, resources), found {len(h2)}")
         elif len(h2) < len(HEADINGS):
             warnings.append(f"README.md: {len(h2)} '## ' sections; the template has {len(HEADINGS)} (learning objectives, exercises, next steps are optional)")
 
-    for target in LINK_RE.findall(body):
+    prose = re.sub(r"^```.*?^```", "", body, flags=re.S | re.M)  # code like `bytes32[](2)` is not a link
+    for target in LINK_RE.findall(prose):
         if re.match(r"^[a-z][a-z0-9+.-]*:", target) or target.startswith("#"):
             continue  # absolute URL, mailto:, or in-page anchor
         rel = target.split("#", 1)[0]
