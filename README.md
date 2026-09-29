@@ -21,3 +21,4 @@ Legend: ✅ current · ⚠️ outdated translation / needs review · 🗄 archiv
 | [On-chain Guestbook](workshops/guestbook/en/README.md) | beginner | 30 minutes | [Ahmed Ali](https://github.com/ahmedali8) | 2026-09-24 | [en](workshops/guestbook/en/README.md) ✅ |
 | [Hackathon Prep with Avalanche](workshops/hackathon-prep/en/README.md) | intermediate | 3 hours + optional L1 lab | [Avalanche Team1](https://team1.network) | 2026-09-11 | [en](workshops/hackathon-prep/en/README.md) ✅ |
 | [Sealed-bid Auctions on a Public Blockchain](workshops/sealed-bid-auctions/en/README.md) | intermediate | 1 hour | [Ahmed Ali](https://github.com/ahmedali8) | 2026-09-24 | [en](workshops/sealed-bid-auctions/en/README.md) ✅ |
+| [Merkle-tree Airdrops](workshops/merkle-airdrop/en/README.md) | intermediate | 2 hours | [Armin Reiter](https://github.com/arminreiter) | 2026-09-29 | [en](workshops/merkle-airdrop/en/README.md) ✅ |
