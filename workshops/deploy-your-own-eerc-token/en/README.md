@@ -300,13 +300,6 @@ Your token works, with real encryption and real proofs, on a testnet. Before any
 | Key management | Keys here live in a JSON file. Lose it and the balance is gone. |
 | Who can see what | Sender, receiver and timing are public. Only amounts are private. |
 
-## Exercises
-
-1. **Chain ID.** Convert `0xa869` to decimal by hand and check it against the table in Part 4. Expected: 43113.
-2. **Find the gate.** In `contracts/auditor/AuditorManager.sol`, find the `onlyIfAuditorSet` modifier. Which functions in `contracts/EncryptedERC.sol` use it? Expected: `privateMint`, `privateBurn`, `transfer`, `deposit`, `withdraw`.
-3. **Count the signals.** Open `circom/transfer.circom` and find the `component main { public [...] }` line at the bottom. Using the array sizes of each listed input, explain why the transfer verifier takes 32 public values and the registration verifier takes 5.
-4. **Mode error.** `deposit` exists on your token but this is a standalone token. Read `onlyForConverter` in `contracts/EncryptedERC.sol` and say in one sentence what converter mode has that yours does not. Expected: a public ERC-20 reserve that deposits lock and withdrawals release.
-
 ## Next steps
 
 - Take the [eERC Token Standard course](https://build.avax.network/academy/blockchain/encrypted-erc) on Avalanche Academy for the compliance and use-case side.
