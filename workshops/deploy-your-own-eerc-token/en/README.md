@@ -2,391 +2,324 @@
 
 ## Overview
 
-In this workshop you set up a Circom toolchain, compile the five zero-knowledge circuits behind the Encrypted ERC (eERC) standard, generate their Solidity verifiers, and deploy a complete private token to Fuji C-Chain. You then register a user, mint encrypted tokens, read a balance only you can decrypt, and send a private transfer. By the end you have a token whose balances are unreadable on-chain, and you know which part of the system enforces that.
+On a normal ERC-20, anyone can read every balance and every transfer amount. eERC (Encrypted ERC) is Avalanche's token standard where the amounts are encrypted and the chain only checks a proof that each operation is valid.
 
-The workshop deploys in **standalone mode**: a new private token whose supply is managed by mint and burn. Converter mode, which wraps an existing ERC-20, uses the same circuits and is covered in Part 14.
+In this workshop you install the eERC toolchain, run its tests, deploy a complete private token to the Fuji testnet, register two accounts, mint tokens, read a balance that only you can decrypt, and send a private transfer. Every step is one command. Under each command you see what the output should look like and what the command did.
 
-![Three layers of an eERC deployment](../assets/architecture.svg)
+![Three layers: your machine holds the key and makes proofs, the token contract stores encrypted balances, the verifiers check proofs](../assets/architecture.svg)
 
 ## Learning objectives
 
-- Install and verify a Circom toolchain, and explain what `hardhat zkit` does on your behalf.
-- Compile Circom circuits to R1CS and generate Groth16 verifier contracts from them.
-- Explain why a downloaded Powers of Tau and zero contributions are acceptable for a testnet and not for mainnet.
-- Deploy the eERC contract set to Fuji and name what each of the eight deployed addresses does.
-- Register a BabyJubJub keypair on-chain without the private key leaving your machine.
-- Mint, read, decrypt and privately transfer an encrypted balance.
-- Read a transfer circuit and name what it proves, including the auditor's role in it.
-- State three specific things this deployment lacks compared with production eERC.
+- Install the eERC repository and explain what `npm install` builds for you.
+- Deploy eight contracts to Fuji and say what each one does.
+- Register a key, mint, read a balance and transfer without any amount appearing on-chain.
+- Explain in plain words what a circuit, a proof, a verifier and an auditor are in eERC.
+- Name two things this testnet deployment lacks before anyone should use it for real value.
 
 ## Prerequisites
 
-- Completed [Build Your First dApp](../../build-your-first-dapp/en/README.md), including a Core wallet on Fuji with test AVAX from [Getting Started with Avalanche](../../getting-started/en/README.md).
-- Comfortable deploying and calling a Solidity contract without following a tutorial. [Hackathon Prep with Avalanche](../../hackathon-prep/en/README.md) covers the deployment loop if you want it first.
-- Useful but not required: [Sealed-bid Auctions on a Public Blockchain](../../sealed-bid-auctions/en/README.md) demonstrates by experiment that `private` in Solidity is a visibility rule and not encryption. This workshop is the encryption answer to the problem it sets up.
-- Node.js 22 or newer. The repository pins `v22.14.0` in `.nvmrc`. Node 18 reached end of life in April 2025 and will not work.
+- Completed [Build Your First dApp](../../build-your-first-dapp/en/README.md), including a Core wallet with Fuji test AVAX from [Getting Started with Avalanche](../../getting-started/en/README.md).
+- Node.js 22. The repository pins `v22.14.0` in `.nvmrc`. Node 18 and 20 are not supported.
 - Git, a terminal and a text editor.
-- A dedicated test wallet. Never use a wallet that holds real funds in a workshop.
-- Roughly 4 GB of free disk space. Circuit compilation is the heaviest step in this workshop.
+- Two dedicated test accounts on Fuji, each with at least 1 test AVAX from the [faucet](https://go.team1.network/faucet). Never use a wallet that holds real funds.
+- About 4 GB of free disk space. Compiling the circuits is the heaviest step.
 
-Zero-knowledge theory is not a prerequisite. The concepts are introduced where they are used. If you want the full treatment of proof systems, circuits and commitments, the ZK Fundamentals course on Avalanche Academy covers them, and the eERC Token Standard course covers what eERC does and why.
+You do not need to know zero-knowledge math. The few terms you need are explained where they appear.
 
-**Facilitators: prepare before the session.** Parts 2 to 5 download several hundred megabytes and compile five circuits. On shared campus bandwidth this can take longer than a lab slot allows. Have participants complete Parts 2 to 5 beforehand, or run them from a pre-warmed clone on a local mirror.
+**Facilitators:** Part 2 downloads several hundred megabytes and compiles five circuits. On campus Wi-Fi this can take 15 to 30 minutes. Have participants finish Parts 2 and 3 before the session.
 
 ## Workshop
 
-### Part 1: What you are building
+### Part 1: What you are building (5 min)
 
-An eERC deployment has three layers.
+Three pieces, in plain words:
 
-| Layer | Holds | Knows |
+| Piece | Where it lives | What it does |
 |---|---|---|
-| Client | The BabyJubJub private key | Plaintext balances and amounts |
-| Token contract | Encrypted balances and the rules | No plaintext value, ever |
-| Verifier contracts | Nothing | Whether a proof is valid |
+| Your machine | Laptop | Holds your secret key. Encrypts amounts and creates proofs. |
+| Token contract | Fuji | Stores encrypted balances. Cannot read them. |
+| Verifier contracts | Fuji | Check that a proof is valid. Return true or false. |
 
-The client encrypts, decrypts and generates proofs. The token contract stores ciphertexts and enforces rules. The verifier runs a pairing check and returns a boolean.
+Four words you will see a lot:
 
-Two deployment modes exist:
+- **Circuit.** A program that describes a rule, such as "this transfer amount is not more than my balance." Written in a language called Circom.
+- **Proof.** A small piece of data that shows you followed the circuit's rule, without revealing your numbers. You create it on your machine.
+- **Verifier.** A contract that checks a proof. Generated from the circuit.
+- **Auditor.** One account whose key can also decrypt every amount. This is how eERC supports compliance. Nothing works until an auditor is set.
 
-| | Standalone | Converter |
-|---|---|---|
-| Token origin | New, private from the first mint | Wraps an existing ERC-20 |
-| Supply managed by | `privateMint` and `privateBurn` | `deposit` and `withdraw` |
-| Total supply | Private throughout | Inferable from the wrapped reserve |
-| Use when | The asset is private by design | An existing public token needs privacy |
+What stays public: who sent to whom, and when. What stays private: how much, and every balance.
 
-This workshop builds standalone. `deposit()` exists on the contract but **reverts in standalone mode** — that is not a bug, and Part 10 revisits it.
-
-What is actually visible on-chain: a public key at registration, a mint the owner performs, and after that nothing but ciphertexts and proofs. Privacy here means amounts and balances, not the existence of a transaction. Transaction senders, recipients and timing remain public.
-
-### Part 2: Environment and repository
+### Part 2: Install (20 to 30 min)
 
 ```sh
 node --version
-# Expect v22.x or newer. Stop here if it is v18.
+```
 
+You should see `v22.x.x`. If the major version is below 22, stop and install Node 22.
+
+```sh
 git clone https://github.com/ava-labs/EncryptedERC.git
 cd EncryptedERC
 npm install
-npx hardhat compile
 ```
 
-`npm install` pulls Hardhat 2, the Solarity zkit plugin, `poseidon-lite`, `@zk-kit/baby-jubjub` and the OpenZeppelin contracts. `npx hardhat compile` builds the Solidity in `contracts/` against solc 0.8.27 with the optimizer at 200 runs, and generates the TypeChain types the deployment scripts import.
+This takes a while. `npm install` does more than download packages here: the repository has a `postinstall` step that compiles the Solidity, downloads the Circom 2.1.9 compiler, downloads a Powers of Tau file (shared setup data every zero-knowledge project uses), compiles the five circuits, and generates five verifier contracts. Expect output like:
 
-If `npx hardhat compile` fails before you have touched anything, resolve that before continuing. A broken baseline makes every later error ambiguous.
+```text
+Compiled NN Solidity files successfully
+> No proper compiler found, trying to download...
+Compiling 5 circuits...
+...
+Generating verifiers...
+```
 
-### Part 3: Compiling the circuits
-
-Five circuits live in `circom/`, one per privileged operation:
-
-| Circuit | Proves |
-|---|---|
-| `registration.circom` | You own the private key for the public key you are registering |
-| `mint.circom` | A mint is correctly encrypted under the recipient's key |
-| `transfer.circom` | You can afford the amount, and every ciphertext is well formed |
-| `withdraw.circom` | A withdrawal amount matches your encrypted balance |
-| `burn.circom` | A burn correctly reduces your encrypted balance |
-
-Compile them:
+Check the result:
 
 ```sh
-npx hardhat zkit make --force
+ls contracts/verifiers
 ```
 
-Everything later depends on this step, and it does more than compile. `hardhat.config.ts` configures it under a `zkit` key:
-
-| Setting | Value | What it means |
-|---|---|---|
-| `compilerVersion` | `2.1.9` | The Circom compiler version the plugin uses |
-| `circuitsDir` | `circom` | Where the `.circom` sources live |
-| `optimization` | `O2` | Constraint-level optimization during compilation |
-| `ptauDownload` | `true` | Fetch Powers of Tau instead of running a ceremony |
-| `provingSystem` | `groth16` | The proof system for the generated keys |
-| `contributions` | `0` | Number of Phase 2 contributions to the trusted setup |
-
-Two of those need naming plainly.
-
-**The plugin manages the Circom compiler for you.** Circom is a Rust binary rather than an npm package, and installing it by hand means installing Rust and building from source. The zkit plugin is configured to use 2.1.9 and handles obtaining it. If it fails, install Circom manually from the [official installation guide](https://docs.circom.io/getting-started/installation/) and run the command again.
-
-**A downloaded Powers of Tau with zero contributions is a development setup.** Phase 1 is circuit-independent, so downloading it is normal practice for testnet work. Phase 2 binds the setup to a specific circuit, and `contributions: 0` means nobody has contributed randomness to it. Anyone who holds the toxic waste from that setup can forge proofs your verifier will accept. This is fine on Fuji, where the tokens are worthless. Anything going to mainnet needs a ceremony whose participants you can account for.
-
-This is the slowest step in the workshop and the most memory-hungry. The transfer circuit is the largest of the five.
-
-### Part 4: From circuit to Solidity verifier
-
-```sh
-npx hardhat zkit verifiers
+```text
+BurnCircuitGroth16Verifier.sol        RegistrationCircuitGroth16Verifier.sol  WithdrawCircuitGroth16Verifier.sol
+MintCircuitGroth16Verifier.sol        TransferCircuitGroth16Verifier.sol
 ```
 
-This writes one Solidity contract per circuit into `contracts/verifiers/`. They are generated code: the verification key is baked in as constants and the pairing check is implemented in assembly against the EVM precompiles. Never edit them, and never hand-tune them.
+Five verifiers, one per circuit: registration, mint, transfer, burn, withdraw. `git status` will show these five files as modified. That is expected: every setup uses fresh randomness, so your verifiers differ slightly from the committed ones. Do not revert them. Your proofs only work with your verifiers.
 
-Open `contracts/verifiers/RegistrationCircuitGroth16Verifier.sol` and find `verifyProof`:
+**If `npm install` fails with `Failed to download a Ptau file`:** the public download bucket is returning HTTP 403 at the time of writing. Get `powersOfTau28_hez_final_15.ptau` from your facilitator, save it as `~/.zkit/ptau/powers-of-tau-15.ptau`, and run `npm install` again.
 
-```solidity
-function verifyProof(
-    uint256[2] memory pointA_,
-    uint256[2][2] memory pointB_,
-    uint256[2] memory pointC_,
-    uint256[5] memory publicSignals_
-) public view returns (bool verified_)
-```
-
-`pointA_` and `pointC_` are G1 points. `pointB_` is a G2 point, which is a 2×2 array because G2 coordinates live in a quadratic field extension. The last argument is sized to that circuit's public signals, and the size differs per circuit:
-
-| Verifier | Public signals |
-|---|---|
-| `RegistrationCircuitGroth16Verifier` | 5 |
-| `WithdrawCircuitGroth16Verifier` | 16 |
-| `BurnCircuitGroth16Verifier` | 19 |
-| `MintCircuitGroth16Verifier` | 24 |
-| `TransferCircuitGroth16Verifier` | 32 |
-
-The pairing check runs on three precompiles, which is where the efficiency comes from:
-
-| Address | Operation | Gas |
-|---|---|---|
-| `0x06` | `ecAdd` on BN254 G1 | 150 |
-| `0x07` | `ecMul` on BN254 G1 | 6,000 |
-| `0x08` | `ecPairing` | 45,000 + 34,000 per pair |
-
-A verifier with a single public signal costs around 196,000 gas: one `ecMul`, one `ecAdd`, a four-pair pairing check, plus calldata and Solidity overhead. **None of eERC's circuits are that cheap** — the smallest has five signals and transfer has thirty-two. Extra signals add one `ecMul` and one `ecAdd` each and leave the pairing check untouched, so the cost grows slowly rather than proportionally. A full private transfer including balance updates and events typically lands between 300,000 and 400,000 gas.
-
-The constraint count of a circuit affects proving key size and proving time. It has **no effect** on verification gas. That is why Groth16 is used for on-chain verification.
-
-These precompiles behave identically on Fuji, C-Chain and Ethereum mainnet, so a verifier written for one deploys unchanged to the others.
-
-### Part 5: Prove it works locally before spending gas
+### Part 3: Run the tests (5 min)
 
 ```sh
 npx hardhat test test/EncryptedERC-Standalone.ts
 ```
 
-This exercises the entire standalone flow against a local network: deploy, register, set an auditor, mint, transfer, burn, withdraw, and the revert cases. It uses the circuits and verifiers you just built, so a pass here means your toolchain is sound.
+The last lines should be:
 
-Run it before touching Fuji. A failure now is local and fast to diagnose. The same failure after deployment costs test AVAX and time.
+```text
+  54 passing (1m)
+```
 
-Read `test/helpers.ts` while it runs. The functions there — `privateMint`, `privateTransfer`, `privateBurn`, `withdraw`, `decryptPCT`, `getDecryptedBalance` — are the reference client for every operation in Parts 8 to 12, and `test/user.ts` shows how a keypair is held.
+The number may differ by one or two; what matters is `passing` with no `failing`. This runs the whole flow you are about to do on Fuji, on a local chain inside Hardhat: deploy, register, set auditor, mint, transfer, burn, and the cases that must fail. A pass means your toolchain is good. A failure here is cheap to fix; a failure on Fuji costs test AVAX and time.
 
-### Part 6: Fuji account and configuration
+### Part 4: Configure Fuji (10 min)
 
-Copy [env.example](../assets/env.example) to `.env` in the repository root and fill it in:
+The repository ships no Fuji network and never reads a private key, so you add both.
 
-| Variable | Value |
-|---|---|
-| `PRIVATE_KEY` | Your dedicated test account's key |
-| `RPC_URL` | `https://api.avax-test.network/ext/bc/C/rpc` |
-| `EERC_NAME` | Your token's name |
-| `EERC_SYMBOL` | Your token's symbol |
-| `EERC_DECIMALS` | `2` unless you have a reason |
+**1. The `.env` file.** Copy [env.example](../assets/env.example) to `.env` in the repository root and fill in `PRIVATE_KEY` and `PRIVATE_KEY_2` with your two test accounts. Leave `REGISTRAR` and `ENCRYPTED_ERC` empty for now.
 
-Set `RPC_URL` explicitly. The Hardhat config falls back to the **mainnet** endpoint when it is unset, and while the `fuji` network entry hardcodes its own URL, relying on that is a habit worth not forming.
+**2. The network.** Open `hardhat.config.ts` and add a `fuji` entry inside `networks`, next to the existing `hardhat` entry:
 
-Confirm the network before deploying:
+```ts
+networks: {
+  hardhat: {
+    // leave the existing block as it is
+  },
+  fuji: {
+    url: process.env.RPC_URL || "https://api.avax-test.network/ext/bc/C/rpc",
+    chainId: 43113,
+    accounts: [process.env.PRIVATE_KEY, process.env.PRIVATE_KEY_2].filter(
+      (k): k is string => !!k,
+    ),
+  },
+},
+```
+
+**3. The scripts.** Copy the six files from this workshop's [assets/scripts](../assets/scripts/) folder into the `scripts/` folder of your clone, and keep your key file out of git:
 
 ```sh
-cast chain-id --rpc-url "$RPC_URL"
-# Expected: 43113. Stop if the network differs.
+echo ".eerc-keys.json" >> .gitignore
 ```
+
+**4. Check you are talking to Fuji:**
+
+```sh
+set -a; source .env; set +a
+curl -s -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' "$RPC_URL"
+```
+
+```text
+{"jsonrpc":"2.0","id":1,"result":"0xa869"}
+```
+
+`0xa869` is 43113 in decimal, the Fuji C-Chain. If you see anything else, fix `RPC_URL` before going on.
+
+From here on, every command starts with `npx hardhat run` and ends with `--network fuji`. Newer npm versions print two `npm notice run ...` lines first; ignore them.
 
 | Field | Value |
 |---|---|
 | Network name | Avalanche Fuji C-Chain |
 | RPC URL | `https://api.avax-test.network/ext/bc/C/rpc` |
 | Chain ID | `43113` |
-| Currency symbol | `AVAX` |
+| Currency | `AVAX` |
 | Explorer | `https://testnet.snowtrace.io` |
 
-`.env` is already listed in the repository's `.gitignore`. Confirm that with `git status` before your first commit anyway. Never put a private key in slides, a repository, a chat or a screen share.
-
-### Part 7: Deploy the stack
+### Part 5: Deploy (10 min)
 
 ```sh
-npm run deploy:fuji
+npx hardhat run scripts/deploy.ts --network fuji
 ```
 
-That runs `scripts/deploy-standalone.ts` against Fuji. It deploys eight contracts and prints them as a table:
+```text
+Deployer: 0xYourFirstAccount
+┌──────────────────────┬──────────────────────────────────────────────┐
+│ registrationVerifier │ '0x...'                                      │
+│ mintVerifier         │ '0x...'                                      │
+│ withdrawVerifier     │ '0x...'                                      │
+│ transferVerifier     │ '0x...'                                      │
+│ burnVerifier         │ '0x...'                                      │
+│ babyJubJub           │ '0x...'                                      │
+│ registrar            │ '0x...'                                      │
+│ encryptedERC         │ '0x...'                                      │
+└──────────────────────┴──────────────────────────────────────────────┘
 
-| Address | Role |
+Add these two lines to .env:
+REGISTRAR=0x...
+ENCRYPTED_ERC=0x...
+```
+
+Paste those two lines into `.env`. Every later script reads them.
+
+Eight contracts went up:
+
+| Contract | Does |
 |---|---|
-| `registrationVerifier` | Checks registration proofs |
-| `mintVerifier` | Checks mint proofs |
-| `withdrawVerifier` | Checks withdrawal proofs |
-| `transferVerifier` | Checks transfer proofs |
-| `burnVerifier` | Checks burn proofs |
-| `babyJubJub` | Curve arithmetic library |
-| `registrar` | Public key registry, holds the registration verifier |
-| `encryptedERC` | The token itself, holds the other four verifiers |
+| Five verifiers | Each checks one kind of proof |
+| `babyJubJub` | Math library for the curve the encryption uses. Deployed once, shared by the token |
+| `registrar` | Phone book of public keys. One address, one key |
+| `encryptedERC` | The token. Holds encrypted balances and the addresses of the other seven |
 
-Save all eight. You need `registrar` and `encryptedERC` for every later part.
+The script deploys the verifiers you generated in Part 2 (`deployVerifiers(deployer, false)`). The repository's own `scripts/deploy-standalone.ts` deploys an older set from `contracts/prod/` that does not match the current circuits, so do not use it here. Your token's name and symbol come from `.env`.
 
-Two details to understand before copying the script:
+### Part 6: Register your keys (10 min)
 
-**BabyJubJub is deployed separately and linked.** It is a library whose functions use the `modexp` precompile at `0x05` for modular inversion, so it deploys as its own contract and `EncryptedERC` links against it at construction. That is why the factory in the script passes an explicit library mapping.
-
-**The Registrar is a separate contract on purpose.** It is a public key registry, a PKI for the system. Splitting it out means one registry can serve several token contracts.
-
-The constructor receives `isConverter: false`, which is what makes this a standalone token. Everything else is metadata and verifier addresses.
-
-### Part 8: Register a user
-
-Before anyone can hold a balance, they register a BabyJubJub public key. The proof establishes that they hold the matching private key without transmitting it.
-
-`circom/registration.circom` takes five signals:
-
-| Signal | Visibility | Value |
-|---|---|---|
-| `SenderPrivateKey` | Private | The formatted BabyJubJub private key |
-| `SenderPublicKey[2]` | Public | The derived public key, two field elements |
-| `SenderAddress` | Public | The EVM address registering |
-| `ChainID` | Public | `43113` on Fuji |
-| `RegistrationHash` | Public | `poseidon3([chainId, privateKey, address])` |
-
-It runs two checks: `CheckPublicKey` confirms the public key derives from the private key, and `CheckRegistrationHash` confirms the hash commits to the chain ID, private key and address together. Then you call `registrar.register()` with the proof and public signals. The registration section of `test/EncryptedERC-Standalone.ts` shows the exact call shape.
-
-Three things the circuit binds, and why each matters:
-
-- **The chain ID.** Without it, a registration proof generated for Fuji would replay on mainnet. The contract checks the chain ID it was given matches its own.
-- **The address.** Without it, anyone could register your public key against their own address.
-- **The registration hash.** It commits to all three values at once, so none can be swapped independently.
-
-The private key is used to generate the proof and is never transmitted. Nothing you send in this transaction reveals it. A second registration from the same address reverts — registration happens once.
-
-### Part 9: Set the auditor
-
-eERC has compliance built in. An auditor holds a key that lets them decrypt transaction data users encrypt for them, which makes selective disclosure possible without weakening privacy against everyone else.
-
-```text
-encryptedERC.setAuditorPublicKey(<auditor address>)
+```sh
+npx hardhat run scripts/register.ts --network fuji
 ```
 
-Owner only. The auditor address **must already be registered** in the Registrar, because the contract reads their public key from it.
-
-**Every value-moving operation reverts until this is set.** The `onlyIfAuditorSet` modifier gates `privateMint`, `publicMint`, `privateBurn`, `transfer`, `deposit` and `withdraw`. This is the most common way a first eERC deployment appears broken: the contracts deployed cleanly, registration succeeded, and every token operation fails. Set it immediately after registration.
-
-The modifier is only half of the enforcement. Part 12 shows the other half, which lives in the circuit.
-
-For this workshop, registering your own second test account as the auditor is fine. In production, auditor selection and key rotation are governance decisions, not deployment details.
-
-### Part 10: Mint private tokens
-
-In standalone mode the owner creates supply with `privateMint`. The amount is encrypted under the recipient's registered public key before it ever reaches the chain.
-
-The call signature, from the test suite:
-
 ```text
-privateMint(address,((uint256[2],uint256[2][2],uint256[2]),uint256[24]))
+0xYourFirstAccount registered. tx: 0x...
+  public key: [1234..., 5678...]
+0xYourSecondAccount registered. tx: 0x...
+  public key: [9012..., 3456...]
 ```
 
-Twenty-four public signals: the receiver's key and ciphertext, the auditor's encrypted summary, the chain ID and a nullifier hash. Use `privateMint` from `test/helpers.ts` to assemble them.
+Each account now has an encryption key in the registrar. The script made a fresh key pair for each account, saved the private half in `.eerc-keys.json` (keep this file; without it you cannot decrypt your balances), and sent only the public half plus a proof. The proof shows you hold the matching private key without sending it. Run the script again and it prints `already registered, skipping`: one address, one registration.
 
-Two behaviours to try:
+### Part 7: Set the auditor (5 min)
 
-**The nullifier prevents replay.** Submit the same mint proof twice and the second attempt reverts with `InvalidNullifier`. A Groth16 proof carries no notion of who submitted it or when, so without an explicit nullifier an observer could resubmit any successful proof from the mempool.
+```sh
+npx hardhat run scripts/set-auditor.ts --network fuji
+```
 
-**`deposit()` reverts here.** It carries an `onlyForConverter` modifier and reverts with `InvalidOperation` in standalone mode. Standalone supply comes from mint and burn; deposit and withdraw belong to converter mode, where a public ERC-20 reserve exists to move. Calling it here is a mode error, not a bug.
+```text
+Auditor set to 0xYourFirstAccount. tx: 0x...
+  auditor public key: [1234..., 5678...]
+```
 
-No plaintext amount appears in the transaction. Check it on the Fuji explorer and confirm that for yourself — the calldata is proof elements and ciphertexts.
+For this workshop your first account is also the auditor. Until this is set, every mint, transfer and burn fails with `Auditor public key not set`. This is the most common reason a fresh eERC deployment looks broken. Every proof from now on also encrypts the amount under this key, so the auditor can read it. Nobody else can.
 
-### Part 11: Read and decrypt your balance
+### Part 8: Mint (5 min)
 
-The contract stores your balance as an ElGamal ciphertext on BabyJubJub and cannot read it. Neither can anyone watching the chain. You read it by fetching the ciphertext and decrypting locally with your private key.
+```sh
+npx hardhat run scripts/mint.ts --network fuji
+```
 
-`getDecryptedBalance` in `test/helpers.ts` does both halves: fetch, then decrypt. `decryptPCT` decrypts the Poseidon ciphertext attached to a specific transaction.
+```text
+Generating mint proof for 1000 units...
+Minted 1000 units to 0xYourFirstAccount. tx: 0x...
+  gas used: 761524
+```
 
-Decryption recovers a value by searching the plausible plaintext range, which is why amounts are bounded rather than unlimited. eERC handles values up to 251 bits, and the practical range for fast decryption is far smaller. A scheme that allowed arbitrary balances would produce ciphertexts nobody could open.
+Amounts are in the smallest unit. With 2 decimals, 1000 means 10.00 tokens. Pass a different amount with `AMOUNT=5000 npx hardhat run ...`.
 
-Call it with the wrong key and you get nothing useful. That is the property working as intended, not an error to debug.
+Open the transaction on [testnet.snowtrace.io](https://testnet.snowtrace.io) and look at the input data. You will find proof points and encrypted values. The number 1000 is not there. The `PrivateMint` event shows who received tokens, not how many.
 
-### Part 12: Private transfer
+Only the owner (your deployer account) can mint. Each mint proof carries a one-time tag called a nullifier; sending the same proof twice fails with `InvalidProof`.
 
-`privateTransfer` in `test/helpers.ts` generates the proof and submits it. The on-chain function is named `transfer`, not `privateTransfer` — the helper builds the proof and calls it.
+### Part 9: Read your balance (5 min)
 
-Open `circom/transfer.circom`. It enforces eight things:
+```sh
+npx hardhat run scripts/balance.ts --network fuji
+```
 
-1. `ValueToTransfer` fits in 252 bits and is below the BabyJubJub subgroup order.
-2. `ValueToTransfer <= SenderBalance`, written as `ValueToTransfer < SenderBalance + 1`.
-3. `CheckPublicKey` — the sender's public key derives from their private key.
-4. `CheckValue` — the stored ciphertext `SenderBalanceC1/C2` decrypts to `SenderBalance`.
-5. `CheckValue` — the sender's own encryption of the amount, `SenderVTTC1/C2`, decrypts to `ValueToTransfer`.
-6. `CheckReceiverValue` — the receiver's ciphertext encrypts the same amount under the receiver's key.
-7. `CheckPCT` — the receiver's Poseidon ciphertext encrypts the amount.
-8. `CheckPCT` — the auditor's Poseidon ciphertext encrypts the amount.
+```text
+0xYourFirstAccount
+  encrypted balance on-chain (c1): [1234...,5678...]
+  decrypted balance:              1000 units
+0xYourSecondAccount
+  encrypted balance on-chain (c1): [0,0]
+  decrypted balance:              0 units
+```
 
-Three of those deserve attention.
+Two steps happen. First the script fetches the ciphertext from the contract, which anyone can do. Then it decrypts with the private key from `.eerc-keys.json`, which only you can do. The contract itself never knows the number 1000.
 
-**The circuit never computes the new balance.** There is no `newBalance === balance - amount` constraint, because the contract performs that subtraction on-chain, homomorphically, using `SenderVTT`. This is why the sender encrypts the amount twice: once under the receiver's key so the receiver can read it, and once under their own key so the contract can subtract it from a balance it cannot decrypt.
+Use the wrong key and decryption throws an error instead of returning a wrong number. That is by design.
 
-**Constraint 8 is the auditor, and it is not optional.** Part 9 gated operations with a modifier. This is the other half: the circuit refuses to produce a proof unless the amount is also encrypted under the auditor's key. Compliance is a condition of the proof existing, not a check bolted on afterwards.
+### Part 10: Private transfer (10 min)
 
-**Constraints 1 and 2 are the range check.** Circuit arithmetic wraps at the field modulus, so subtracting past zero does not go negative — it wraps to an enormous number. `Num2Bits(252)` forces both values into a bounded bit width before `LessThan` compares them. Without that, a comparator's answer is meaningless, and "add a comparison" is the most common incomplete fix.
+```sh
+npx hardhat run scripts/transfer.ts --network fuji
+```
 
-Now read the contract side. Before verifying anything, `transfer` checks that every value it is about to act on appears in the proof's public signals.
+```text
+Sender balance: 1000 units. Transferring 250...
+Transferred 250 units to 0xYourSecondAccount. tx: 0x...
+  gas used: 1129196
+```
 
-**The binding matters.** A proof establishes a relationship between values. It says nothing about whether those values are the ones the contract is storing. Skip the check and an attacker generates an honest proof about a balance they invented, and the verifier accepts it. The proof is not false. It answers a different question.
+Run `scripts/balance.ts` again: 750 and 250.
 
-The sharpest case is the transfer ciphertext. Bind the balances, feel finished, forget the amount ciphertext, and you have built a mint: the attacker proves an honest one-token transfer, then passes a ciphertext encrypting any number they like under the recipient's key. Verification passes. The recipient's balance grows by the attacker's number. Nothing on-chain looks unusual.
+What the proof shows, in plain words: "I own this key. My encrypted balance decrypts to a number. The amount is not more than that number. I encrypted the same amount for the receiver, for myself and for the auditor." The contract then subtracts from your encrypted balance and adds to the receiver's without decrypting either. That is possible because the encryption used here lets you add and subtract ciphertexts directly.
 
-Read the argument list of any function like this and confirm each argument is either bound to a public signal or irrelevant to the outcome.
+Gas: this first transfer cost 1,129,196 on Fuji and the mint 761,524. The repository's own gas report averages 947,000 for a transfer and 722,000 for a mint; your first transfer pays extra because the receiver's balance storage is written for the first time. A normal ERC-20 transfer is about 50,000 to 65,000. Around 380,000 of the transfer cost is checking the proof; the rest is curve math and storage.
 
-### Part 13: Break it on purpose
+### Part 11: Try to break it (10 min)
 
-Trigger these now, while you know your proof is good.
+**Spend more than you have.**
 
-**A stale sender balance.** Generate a transfer proof, then change your balance with a different transaction before submitting it. The proof still verifies, but the contract rejects it, because the old balance it commits to no longer matches storage. That is replay protection working. It is also why a proof sitting in the mempool can be invalidated by a transaction that lands first.
+```sh
+AMOUNT=999999 npx hardhat run scripts/transfer.ts --network fuji
+```
 
-**A missing auditor.** On a fresh deployment, skip Part 9 and attempt a mint. `onlyIfAuditorSet` reverts before any proof is checked. Compare that revert with the one you get from a bad proof — knowing which layer rejected you saves a great deal of time.
+The script fails on your machine while generating the proof. No transaction is sent and no gas is spent. The rule "amount is not more than balance" is enforced before anything reaches the chain.
 
-**A reused mint proof.** Submit the same mint proof twice and read the `InvalidNullifier` revert.
+**Skip the auditor.** If you deploy a fresh stack and run `mint.ts` before `set-auditor.ts`, the transaction reverts with `Auditor public key not set`. Compare that with a bad proof, which reverts with `InvalidProof`. Knowing which layer rejected you saves a lot of debugging time.
 
-**The failure you will not hit here, and will hit later.** snarkjs serializes the inner arrays of `pi_b` in one order and Solidity verifiers read them in the other. Get it wrong and `verifyProof` returns `false` for a perfectly valid proof: no revert, no error message, no gas anomaly. The transaction succeeds and reports failure.
+**Lose your key.** Rename `.eerc-keys.json` and run `balance.ts`. The script creates new keys and decryption throws, because the on-chain balance is encrypted under the old key. Rename the file back. There is no recovery path for a lost eERC key; a production wallet derives it from a signature instead of storing a random one.
 
-You will not see this in this workshop, because zkit's `generateCalldata` orders the arguments for you. You will see it the first time you write a client directly against snarkjs. When a proof you believe is correct returns `false`, check the calldata encoding before you suspect the circuit — a wrong public signal produces identical symptoms, and the verifier cannot tell you which of the two happened.
+### Part 12: What this is not (5 min)
 
-### Part 14: What production adds
-
-What you deployed is real and incomplete. Five specific gaps:
+Your token works, with real encryption and real proofs, on a testnet. Before anyone uses it for value:
 
 | Gap | Why it matters |
 |---|---|
-| Trusted setup | Zero contributions means forgeable proofs. Mainnet needs an accountable ceremony. |
-| Converter mode | Wrapping an ERC-20 needs its own circuits plus reserve accounting the contract can verify without reading balances. |
-| Auditor operations | Key rotation, revocation and jurisdictional policy are governance, not a constructor argument. |
-| Event indexing | Users should reconstruct their history by scanning events and decrypting what is theirs, rather than the contract storing it. |
-| Front-running | A proof sits in the mempool before inclusion. Ciphertexts and proof elements are visible even though the private inputs are not. |
-
-On that last point: reordering can invalidate a pending proof and cause a revert, which is griefing rather than theft. Proof copying is the sharper risk, and binding `msg.sender` into the circuit as a public input is the clean fix. Avalanche's sub-second finality narrows both windows without closing them. Custom L1s can hide transactions until inclusion at the VM level.
-
-State what your deployment provides: confidential amounts and balances, on a testnet, with a development trusted setup. It is not anonymity, and it is not audited.
+| Trusted setup | `npm install` ran the key-generation ceremony on your laptop alone. Whoever controls that machine could forge proofs. Production needs a multi-party ceremony with a published transcript. |
+| Audits | The eERC code was audited in March 2025 (reports in the repository's `audit/` folder). The circuits changed since, including security fixes in August 2026. |
+| Key management | Keys here live in a JSON file. Lose it and the balance is gone. |
+| Who can see what | Sender, receiver and timing are public. Only amounts are private. |
 
 ## Exercises
 
-1. **Chain ID check.** Call `eth_chainId` against your RPC and convert the hex result to decimal. Does it match the table in Part 6?
-2. **Signal counts.** Explain why the transfer verifier takes 32 public signals and the registration verifier takes 5. Use the `component main { public [ ... ] }` line at the bottom of each circuit.
-3. **The auditor gate.** Deploy a fresh stack, register a user, and attempt a mint before setting the auditor key. Record the exact revert. This is the failure you will hit in the wild.
-4. **Find the binding.** In `contracts/EncryptedERC.sol`, locate where `transfer` binds a value to a public signal. Name one argument that is bound and one that is not, and justify why the unbound one is safe.
-5. **Gas reality check.** Take the receipt from your private transfer and compare its gas used against the 300,000 to 400,000 range in Part 4. Account for the difference.
-6. **Mode error.** Call `deposit()` on your standalone token. Read the revert, then explain in one sentence what converter mode has that standalone does not.
-7. **Why encrypt twice?** The sender encrypts the transfer amount under their own key as well as the receiver's. Explain what the contract does with `SenderVTT` and why the circuit does not need to compute the new balance itself.
-8. **Stretch.** Remove the `Num2Bits(252)` check on `SenderBalance + 1` in `circom/transfer.circom`, recompile, and describe what a malicious prover could now do.
+1. **Chain ID.** Convert `0xa869` to decimal by hand and check it against the table in Part 4. Expected: 43113.
+2. **Find the gate.** In `contracts/auditor/AuditorManager.sol`, find the `onlyIfAuditorSet` modifier. Which functions in `contracts/EncryptedERC.sol` use it? Expected: `privateMint`, `privateBurn`, `transfer`, `deposit`, `withdraw`.
+3. **Count the signals.** Open `circom/transfer.circom` and find the `component main { public [...] }` line at the bottom. Using the array sizes of each listed input, explain why the transfer verifier takes 32 public values and the registration verifier takes 5.
+4. **Mode error.** `deposit` exists on your token but this is a standalone token. Read `onlyForConverter` in `contracts/EncryptedERC.sol` and say in one sentence what converter mode has that yours does not. Expected: a public ERC-20 reserve that deposits lock and withdrawals release.
 
 ## Next steps
 
-- Work through the eERC Token Standard course on Avalanche Academy for the compliance and use-case material this workshop treats briefly.
-- Study the ZK Fundamentals course on Avalanche Academy to write your own circuits rather than compiling someone else's.
-- Deploy in converter mode with `scripts/deploy-converter.ts` and compare the supply mechanics against what you built here.
-- Read the [audit reports](https://github.com/ava-labs/EncryptedERC/tree/main/audit) in the repository before using any of this beyond a testnet.
-- Build a browser client that generates proofs in a Web Worker. Proving is CPU-bound and will freeze a UI otherwise.
+- Take the [eERC Token Standard course](https://build.avax.network/academy/blockchain/encrypted-erc) on Avalanche Academy for the compliance and use-case side.
+- Deploy converter mode, which wraps an existing ERC-20 with the same five circuits: copy `scripts/deploy-converter.ts`, change `deployVerifiers(deployer, true)` to `false`, and run it with `--network fuji`.
+- Read the [audit reports](https://github.com/ava-labs/EncryptedERC/tree/main/audit) before using eERC beyond a testnet.
 
 ## Resources
 
 - [EncryptedERC repository](https://github.com/ava-labs/EncryptedERC)
 - [eERC documentation on AvaCloud](https://docs.avacloud.io/encrypted-erc)
-- [Avalanche Academy](https://go.team1.network/academy)
+- [eERC Token Standard course, Avalanche Academy](https://build.avax.network/academy/blockchain/encrypted-erc)
+- [hardhat-zkit plugin](https://github.com/dl-solarity/hardhat-zkit)
+- [Circom documentation](https://github.com/iden3/circom/tree/master/mkdocs/docs)
 - [Avalanche documentation](https://go.team1.network/docs)
-- [Circom installation guide](https://docs.circom.io/getting-started/installation/)
-- [Circom language documentation](https://docs.circom.io)
-- [snarkjs](https://github.com/iden3/snarkjs)
-- [EIP-1108, the precompile gas prices](https://eips.ethereum.org/EIPS/eip-1108)
 - [Fuji faucet](https://go.team1.network/faucet)
 - [Fuji explorer (Snowtrace)](https://testnet.snowtrace.io)
