@@ -86,7 +86,19 @@ MintCircuitGroth16Verifier.sol        TransferCircuitGroth16Verifier.sol
 
 Five verifiers, one per circuit: registration, mint, transfer, burn, withdraw. `git status` will show these five files as modified. That is expected: every setup uses fresh randomness, so your verifiers differ slightly from the committed ones. Do not revert them. Your proofs only work with your verifiers.
 
-**If `npm install` fails with `Failed to download a Ptau file`:** the public download bucket is returning HTTP 403 at the time of writing. Get `powersOfTau28_hez_final_15.ptau` from your facilitator, save it as `~/.zkit/ptau/powers-of-tau-15.ptau`, and run `npm install` again.
+**If `npm install` fails with `Failed to download a Ptau file`:** the plugin fetches the file from a Google Cloud bucket that has been returning HTTP 403. Download Team1's copy (36 MB), check the hash, and run `npm install` again:
+
+```sh
+mkdir -p ~/.zkit/ptau
+curl -L -o ~/.zkit/ptau/powers-of-tau-15.ptau https://cdn.team1.network/zkit/powers-of-tau-15.ptau
+python3 -c "import hashlib; print(hashlib.blake2b(open('$HOME/.zkit/ptau/powers-of-tau-15.ptau','rb').read()).hexdigest())"
+```
+
+```text
+982372c867d229c236091f767e703253249a9b432c1710b4f326306bfa2428a17b06240359606cfe4d580b10a5a1f63fbed499527069c18ae17060472969ae6e
+```
+
+The hash must match the `hez_final_15` row in the [snarkjs README](https://github.com/iden3/snarkjs#7-prepare-phase-2); it is the same public file every Circom project uses, just hosted by Team1. Original source: circom ([circom.info/powersOfTau28_hez_final_15.ptau](https://circom.info/powersOfTau28_hez_final_15.ptau)). The plugin looks in `~/.zkit/ptau/` first and only downloads when nothing large enough is there.
 
 ### Part 3: Run the tests (5 min)
 
@@ -106,7 +118,7 @@ The number may differ by one or two; what matters is `passing` with no `failing`
 
 The repository ships no Fuji network and never reads a private key, so you add both.
 
-**1. The `.env` file.** Copy [env.example](../assets/env.example) to `.env` in the repository root and fill in `PRIVATE_KEY` and `PRIVATE_KEY_2` with your two test accounts. Leave `REGISTRAR` and `ENCRYPTED_ERC` empty for now.
+**1. The `.env` file.** Copy [.env.example](../assets/.env.example) to `.env` in the repository root and fill in `PRIVATE_KEY` and `PRIVATE_KEY_2` with your two test accounts. Leave `REGISTRAR` and `ENCRYPTED_ERC` empty for now.
 
 **2. The network.** Open `hardhat.config.ts` and add a `fuji` entry inside `networks`, next to the existing `hardhat` entry:
 
@@ -128,15 +140,14 @@ networks: {
 **3. The scripts.** Copy the six files from this workshop's [assets/scripts](../assets/scripts/) folder into the `scripts/` folder of your clone, and keep your key file out of git:
 
 ```sh
-echo ".eerc-keys.json" >> .gitignore
+printf '\n.eerc-keys.json\n' >> .gitignore
 ```
 
 **4. Check you are talking to Fuji:**
 
 ```sh
-set -a; source .env; set +a
-curl -s -X POST -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' "$RPC_URL"
+(set -a; source .env; set +a; curl -s -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' "$RPC_URL")
 ```
 
 ```text
@@ -144,6 +155,8 @@ curl -s -X POST -H "Content-Type: application/json" \
 ```
 
 `0xa869` is 43113 in decimal, the Fuji C-Chain. If you see anything else, fix `RPC_URL` before going on.
+
+The parentheses run the check in a throwaway subshell, so nothing from `.env` stays exported in your terminal. That matters: Hardhat reads `.env` itself on every run and will not overwrite a variable that is already set in the shell, so a stale exported value would hide the addresses you add to `.env` in Part 5.
 
 From here on, every command starts with `npx hardhat run` and ends with `--network fuji`. Newer npm versions print two `npm notice run ...` lines first; ignore them.
 
